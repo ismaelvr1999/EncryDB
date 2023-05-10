@@ -10,8 +10,12 @@
 from TSFile import TSFile
 import nacl.encoding
 import nacl.hash
+import re
 
-class Table (TSFile):
+class Table(TSFile):
+    #----------------------------------
+    # CONSTRUCTOR
+    #----------------------------------
     def __init__(self, filename, dicProps = { "reopen" : True }):
         self.filename = filename
         #If reopen toma propiedades del archivo, else archivo de nueva creacion
@@ -22,32 +26,35 @@ class Table (TSFile):
             self.file = open(filename, 'wt')
             self.__write_header(dicProps)
         self.file.close()
-
+    #Funcion modificada
     def __write_header(self, dicProps):
-            lines = []
-            ln_cnt = 7  #Basic 7-line header ...
-            col_cnt = 0
-            lines.append("\tMETADATA_BEGIN\t..........")
-            lines.append("\tN\tM\tC\tK")
-            lines.append("\t" +  self.__marsh_num(0))
-            #add primary key--------------------------- 
-            #Esto solo fue una prueba, no es viable agregar la pk como meta-registro
-            # lines.append("\tPK_"+dicProps["PK_Column"])
-            # ln_cnt +=1 
-            # -----------------------------------------
-            #... or maybe more, for specialized files
-            if ("extra_lines" in dicProps.keys()):
-                for ln in dicProps["extra_lines"]:
-                    lines.append(ln) #Add as is... no ENTER at the end
-                    ln_cnt += 1
-            lines[2] += "\t" +  self.__marsh_num(ln_cnt)
-            lines.append("")
-            lines.append("")
-            lines.append("_ID") # quite \t, da problemas en la funcion __process_hdr_cols 
+        self.props = { "HDR_SZ" : 0}
+        lines = []
+        ln_cnt = 7  #Basic 7-line header ...
+        col_cnt = 0
+        lines.append("\tMETADATA_BEGIN\t..........")
+        lines.append("\tN\tM\tC\tK")
+        self.props["N"] = 0
+        self.props["M"] = 7
+        self.props["C"] = len(dicProps)
+        self.props["K"] = 1
+        lines.append("\t" + self.__marsh_num(0))
+        #... or maybe more, for specialized files
+        if ("extra_lines" in dicProps.keys()):
+            for ln in dicProps["extra_lines"]:
+                lines.append(ln) #Add as is... no ENTER at the end
+                ln_cnt += 1
+        lines[2] += "\t" + self.__marsh_num(ln_cnt)
+        lines.append("")
+        lines.append("")
+        lines.append("_ID")
+        self.col_hdr = { "_ID": (10, "NUM")}
 
-            #add primary key and foreign keys-------------------
+        #add primary key and foreign keys-------------------
+        pk_fk_cnt = 0 
+        if("PK_Column" in dicProps.keys()):
             lines[-1]+="\t_PK_"+dicProps["PK_Column"]
-            pk_fk_cnt = 1 #numero de llaves primarias y foraneas
+            pk_fk_cnt += 1 #numero de llaves primarias y foraneas
             if ("FK_Columns" in dicProps.keys() and len(dicProps["FK_Columns"])>0 ):
                 #lines[-3] += "\tFK" fue una prueba, da problemas en la funcion __process_hdr_cols 
                 #lines[-2] += "\t" +  fue una prueba, da problemas en la funcion __process_hdr_cols 
@@ -56,26 +63,28 @@ class Table (TSFile):
                     pk_fk_cnt += 1
             #--------------------------------------
 
-            for col in dicProps["usr_columns"]:
-                if (col["tipo"] in ("NUM", "TEXT", "LABEL", "BINARY")):
-                    lines[-3] += "\t" + col["tipo"]  
-                    lines[-2] += "\t" +  self.__marsh_num(col["size"]) 
-                    lines[-1] += "\t" + col["label"] 
-                    col_cnt += 1
-                else:
-                    pass # error
-            lines[2] += "\t" + self.__marsh_num(col_cnt)
-            lines[2] += "\t" +  self.__marsh_num(1+pk_fk_cnt) # Modificado, numero de metacolumnas
-                    
-            lines.append("\tMETADATA_END\t..........")
-            hdr_sz = 0
-            hdr_txt = ""
-            for i in range(len(lines)):
-                lines[i] += "\t\n"
-                hdr_sz += len(lines[i])+1  #+1 porque se agrega un \r al ENTER
-                hdr_txt += lines[i]
-            self.file.write(hdr_txt.replace("..........",
-                                             self.__marsh_num(hdr_sz)))
+        for col in dicProps["usr_columns"]:
+            if (col["tipo"] in ("NUM", "TEXT", "LABEL", "BINARY")):
+                lines[-3] += "\t" + col["tipo"]  
+                lines[-2] += "\t" + self.__marsh_num(col["size"]) 
+                lines[-1] += "\t" + col["label"] 
+                col_cnt += 1
+                self.col_hdr[col["label"]] = (col["size"], col["tipo"])
+            else:
+                pass # error
+        lines[2] += "\t" + self.__marsh_num(col_cnt)
+        lines[2] += "\t" + self.__marsh_num(1+pk_fk_cnt)
+                
+        lines.append("\tMETADATA_END\t..........")
+        hdr_sz = 0
+        hdr_txt = ""
+        for i in range(len(lines)):
+            lines[i] += "\t\n"
+            hdr_sz += len   (lines[i])+1  #+1 porque se agrega un \r al ENTER
+            hdr_txt += lines[i]
+        self.file.write(hdr_txt.replace("..........",
+                                         self.__marsh_num(hdr_sz)))
+        self.props["HDR_SZ"] = hdr_sz
     #Funcion no modificada, no es necesario
     def __read_header(self):
         self.props = { "HDR_SZ" : 0}
@@ -110,6 +119,7 @@ class Table (TSFile):
                 self.__process_hdr_cols (lines[-2].split("\t"),
                                          lines[-3].split("\t"),
                                          lines[-4].split("\t"))
+                self.save_pk_fk(lines[-2].split("\t"))
         else: #not TSV file. throw error?
             pass
     #Funcion no modificada, no es necesario
@@ -127,7 +137,7 @@ class Table (TSFile):
                 pass # error de formato
         else:
             pass #error de formato
-    #Funcion no modificada, no es necesario
+    #Funcion no modificada, no es necesario 
     def __process_hdr_props(self, ln_key, ln_val):
         #en las propiedades debe existir una etiqueta por valor
         if (len(ln_key) != len(ln_val)):
@@ -146,7 +156,7 @@ class Table (TSFile):
                 self.props[etq] = ln_val[i]
     #Funcion modificada
     def __process_hdr_cols(self, ln_head, ln_size, ln_type):
-        #3 filas pq cada columna necesita una 3-tupla, todas del mismo tamaño
+        #index 0 es caso expecial, index -1 es vacio
         if (ln_head[0] == "_ID"):
             self.col_hdr = { "_ID": (10, "NUM")}
         else:
@@ -158,17 +168,17 @@ class Table (TSFile):
             if(x.startswith("_") and x != "_ID"):
                 if(x.startswith("_PK")):
                     ln_head.remove(x)
-                    self.col_hdr[x] = (64,"PK")
+                    self.col_hdr[x] = (64,"_PK") 
                     self.pk_fk_num +=1  
                 else:                    
                     ln_head.remove(x)
-                    self.col_hdr[x] = (64,"FK")
+                    self.col_hdr[x] = (64,"_FK")
                     self.pk_fk_num +=1
         #=======================================
+        #3 filas pq cada columna necesita una 3-tupla, todas del mismo tamaño
         if (len(ln_head) != len(ln_size) or
             len(ln_head) != len(ln_type)):
             pass #format error
-        #index 0 es caso expecial, index -1 es vacio
 
         for i in range(1, len(ln_head)-1):
             #los titulos de columna son siempre alfabeticas (con guion bajo para metacolumnas)
@@ -176,14 +186,7 @@ class Table (TSFile):
                 pass # No es un encabezado de columna, error
             etq = ln_head[i].upper()
             tipo = ln_type[i].upper()
-            #modificado ===================
-            # devolvia un error cuando convertia '', por el \t del _ID 
-            # if(ln_size[i].strip() != ''):
-            #     tamano = int(ln_size[i].strip())
-            # else:
-            #     tamano = 0
             tamano = int(ln_size[i].strip())
-            #modificado ======================
             #Los titulos de la columna son definidos por el usuario,
             #pero solo existen 4 tipos validos
             if (tipo in ("NUM", "TEXT", "LABEL", "BINARY")): #tipos validos
@@ -191,46 +194,139 @@ class Table (TSFile):
             else: 
                 pass #tipo desconocido, error
             #print(etq)
-        #print(self.col_hdr)
-            
+
+    #Funcion no modificada, no es necesario 
+    def __marsh_num (self, num, n=10): #De momento, solo enteros
+        strNum = ""
+        if (type(num) == int):
+            if (num < 0):
+                strNum = "-" + str(num).rjust(n-1, "0")
+            else:
+                strNum = str(num).rjust(n, "0")
+        else:
+            pass
+        return strNum
+    #Funcion no modificada, no es necesario 
+    def __unmarsh_num (self, strNum): #De momento, solo enteros
+        num = float("nan")
+        if (strNum.isnumeric() or (strNum.startswith("-") and
+            strNum.lstrip("-").isnumeric())):
+            num = int(strNum)
+        #elif (float???
+        else:
+            pass #Not really a number
+        return num
+    #Funcion no modificada, no es necesario 
+    def __marsh_txt (self, txt, n): #txt es un string, lo delimita entre comillas
+        backslash = '\\'
+        dquote = '"'
+        outTxt = ""
+        if (type(txt) == str):
+            outTxt = re.sub(backslash+backslash, backslash+backslash, txt)
+            outTxt = re.sub(dquote,    backslash+dquote, outTxt)
+
+            outTxt = outTxt[:n-2]               # cut to size
+            outTxt = dquote + outTxt + dquote   #add begin/end doublequotes
+            outTxt = outTxt.ljust(n)            #fill to size
+            print(outTxt)
+        else:
+            pass
+        return outTxt
+    #Funcion no modificada, no es necesario 
+    def __unmarsh_txt (self, strTxt): #strTxt es un string, su contenido delimitado por comillas
+        backslash = '\\'
+        dquote = '"'
+        outTxt = ""
+        if (type(strTxt) == str):
+            outTxt = strTxt.rstrip()                        #remueve todo lo agregado por ljust(n)
+            outTxt = re.sub('^"|"$', '', outTxt)
+            #outTxt = re.sub('', '', outTxt)
+            outTxt = re.sub(backslash+dquote, dquote, outTxt)
+            print(outTxt)
+        else:
+            pass
+        return outTxt
+    
+    #---------------------------
+    # READ RECORD
+    #---------------------------
+    #Funcion no modificada
+    def read_record(self, rec_num):
+        self.file = open(self.filename, 'rt')
+        #desplaza el apuntador hasta el registro correcto
+        rec_sz = len(self.col_hdr) +2  #1 TAB por columna + \r\n
+        for tup in self.col_hdr.values(): 
+            rec_sz += tup[0]  #suma los tamaños de cada columna
+        self.file.seek(self.props["HDR_SZ"] + (rec_sz*rec_num))
+        line = self.file.readline()
+        # print(line)
+        self.file.close()
+        return self.__unmarshall(line)
+    #Funcion no modificada
+    def __unmarshall (self, line):
+        #print(line)
+        L = line.split("\t")
+        #for i in range(len(L)):
+        #    print("{a} {b}".format(a = i, b =L[i]))
+        if (L[-1] == "\n"):
+            L.pop()
+        else:
+            pass #Bad format, error
+
+        i = len(L)
+        for keyz in reversed (self.col_hdr.keys()):
+            i = i-1
+        #    print(keyz)
+        #    print( L[i])
+            if (keyz.startswith("_")):
+                L.pop(i)  #meta-column, not part of the user data
+            else:
+                tup = self.col_hdr[keyz]
+                if (tup[1] == "NUM"):
+                    L[i] = self.__unmarsh_num(L[i])
+                #Los otros casos no funcionan aun...
+                elif (tup[1] == "TEXT"):
+                    L[i] = self.__unmarsh_txt(L[i])
+                elif (tup[1] == "LABEL"):
+                    pass
+                elif (tup[1] ==  "BINARY"):
+                    pass 
+        return L
+        
+
     #---------------------------
     # INSERT RECORD
     #---------------------------
     #funcion modificada
     def insert_record(self, tupla):
+        #print(self.props)
         #construye la linea, escribela
         self.file = open(self.filename, 'at')     #append, record siempre al final
         ln  = self.__marsh_num(self.props["N"])
         ln += "\t"  #Inserta al final, _IDX es el valor de N
         #insertar pk y fk==========================
-        i=0
         if(self.pk_fk_num>0):
+            i=0
+            y=0
             for x in tupla:
                 if(i<self.pk_fk_num ):
-                    ln += self.hash_txt(str(x)).decode()+"\t"
+                    if(type(x) == int):
+                        ln += self.hash_txt(str(x)).decode()+"\t"
+                        txt = self.hash_txt(str(x)).decode()
+                    elif(type(x) == str):
+                        ln += self.hash_txt(x).decode()+"\t"
+                        txt = self.hash_txt(str(x)).decode()
+                    if(i == 0):
+                        self.list_PK[self.pk_name].append(txt)
+                    elif(i!=0):
+                        self.list_FK[self.fk_names[y]].append(txt)
+                        y+=1
                 i+=1
         #=================================
         ln += self.__marshall(tupla)
         self.file.write(ln)
         self.file.close()
-        #insertar pk ===============================
-        # tener la pk como un meta registro da mas problemas que beneficios, por lo que sera meta-columna
-        # self.file = open(self.filename, 'rt')
-        # self.file.seek(0)
-        # pk_pos = len (self.file.readline())+1 #METADATA_BEGIN
-        # pk_pos += len (self.file.readline())+1 #PARAMETER TITLES
-        # pk_pos += len (self.file.readline())+1 #CONFIG VALs
-        # ln_pk = self.file.readline().split("\t")
-        # self.file.close()
-
-        # self.file = open(self.filename, 'r+t')
-        # self.file.seek(pk_pos)
-        # print(self.file.readline())
-        # print(ln_pk)
-        # id_hash = self.hash_txt(str(tupla[0])).decode()
-        # self.file.write('\t'+id_hash+'\t\n')
-        # self.file.close()
-        # #=================================
+        
         #modifica parametro N, tambien en disco
         self.props["N"] += 1
         self.file = open(self.filename, 'rt') #Abre para leer la posicion correcta
@@ -255,58 +351,9 @@ class Table (TSFile):
         print(Nval.rjust(10, "0"))
         self.file.write(Nval.rjust(10, "0"))
         self.file.close()
-
-    #---------------------------
-    # READ RECORD
-    #---------------------------
-    #funcion modificada
-    def read_record(self, rec_num):
-        self.file = open(self.filename, 'rt')
-
-        #desplaza el apuntador hasta el registro correcto
-        print(len(self.col_hdr))
-        rec_sz = len(self.col_hdr) +2  #1 TAB por columna + \r\n
-        for tup in self.col_hdr.values(): 
-            rec_sz += tup[0]  #suma los tamaños de cada columna
-            print(tup[0])
-        self.file.seek(self.props["HDR_SZ"] + (rec_sz*rec_num))
-        # self.file.seek(819)
-        print(rec_sz*rec_num)
-        line = self.file.readline()
-        # print(line)
-        self.file.close()
-        # return self.__unmarshall(line) no funciona
-        return line
-    #Funcion no modificada, no es necesario
-    def __marsh_num (self, num): #De momento, solo enteros
-        strNum = ""
-        if (type(num) == int):
-            if (num < 0):
-                strNum = "-" + str(num).rjust(9, "0")
-            else:
-                strNum = str(num).rjust(10, "0")
-        else:
-            pass
-        return strNum
-    #Funcion no modificada, no es necesario
-    def __unmarsh_num (self, strNum): #De momento, solo enteros
-        num = float("nan")
-        if (strNum.isnumeric() or (strNum.startswith("-") and
-            strNum.lstrip("-").isnumeric())):
-            num = int(strNum)
-        #elif (float???
-        else:
-            pass #Not really a number
-        return num
-
-    # Funcion creada, convierte texto plano a hash
-    def hash_txt(self,txt): 
-        HASHER = nacl.hash.sha256
-        msg = txt.encode()
-        digest = HASHER(msg, encoder=nacl.encoding.HexEncoder)
-        return digest
-    #Funcion no modificada, no es necesario
+    #Funcion no modificada
     def __marshall(self, tupla):
+
         if (len(tupla) != self.props["C"]):
             pass # Invalid argument error
 
@@ -323,64 +370,95 @@ class Table (TSFile):
                     ln += self.__marsh_num(tupla[i]) + "\t"
                 #Los otros casos no funcionan aun...
                 elif (tup[1] == "TEXT"):
-                    pass
+                    ln += self.__marsh_txt(tupla[i], tup[0]) + "\t"
                 elif (tup[1] == "LABEL"):
                     pass
                 elif (tup[1] ==  "BINARY"):
                     pass 
                 i += 1
         return ln+"\n"
-    #Funcion no modificada, no funciona correctamente
-    def __unmarshall (self, line):
-        #print(line)
-        L = line.split("\t")
-        #for i in range(len(L)):
-        #    print("{a} {b}".format(a = i, b =L[i]))
-        if (L[-1] == "\n"):
-            L.pop()
-        else:
-            pass #Bad format, error
+    
+    # Funcion creada, convierte texto plano a hash
+    def hash_txt(self,txt): 
+        HASHER = nacl.hash.sha256
+        msg = txt.encode()
+        digest = HASHER(msg, encoder=nacl.encoding.HexEncoder)
+        return digest
+    # Funcion creada, para guardar todas las llaves primarias y foranes en un lista
+    def save_pk_fk(self,ln_head):
+        ln_head_copy = ln_head.copy()
+        self.list_PK = {}
+        self.list_FK = {}
+        for x in ln_head_copy:
+            if(x.startswith("_") and x != "_ID"):
+                if(x.startswith("_PK")):
+                    self.list_PK[x] = []
+                else:                    
+                    self.list_FK[x] = []
+        self.file = open(self.filename, 'rt')
+        self.pk_name = list(self.list_PK.keys())[0]
+        self.fk_names = list(self.list_FK.keys())
+        i_fk = 0
+        # desplaza el apuntador hasta el registro correcto
+        for i in range(0,self.props["N"]):
+            rec_sz = len(self.col_hdr) +2  #1 TAB por columna + \r\n
+            for tup in self.col_hdr.values(): 
+                rec_sz += tup[0]  #suma los tamaños de cada columna
+            self.file.seek(self.props["HDR_SZ"] + (rec_sz*i))
+            line = self.file.readline()
+            lista_registros = line.split("\t")
 
-        i = len(L)
-        for keyz in reversed (self.col_hdr.keys()):
-            i = i-1
-        #    print(keyz)
-        #    print( L[i])
-            if (keyz.startswith("_")):
-                L.pop(i)  #meta-column, not part of the user data
-            else:
-                tup = self.col_hdr[keyz]
-                if (tup[1] == "NUM"):
-                    L[i] = self.__unmarsh_num(L[i])
-                #Los otros casos no funcionan aun...
-                elif (tup[1] == "TEXT"):
-                    pass
-                elif (tup[1] == "LABEL"):
-                    pass
-                elif (tup[1] ==  "BINARY"):
-                    pass 
-        return L
+            for y in range(1,self.pk_fk_num+1):
+                if(y == 1):
+                    self.list_PK[self.pk_name].append(lista_registros[y])
+                else:
+                    self.list_FK[self.fk_names[i_fk]].append(lista_registros[y])
+                    i_fk+=1
+            i_fk = 0
+        self.file.close()
+        # print(self.list_FK)
+        # print(self.list_PK)
+    #Funcion creada, para buscar un registro por pk
+    def read_pk(self,pk):
+        if(type(pk) == int):
+            pk_hash = self.hash_txt(str(pk)).decode()
+        elif(type(pk) == str):
+            pk_hash  = self.hash_txt(pk).decode()
+        # print(self.list_PK)
+        # print(self.list_FK)
+        # print(pk_hash)
+        if(pk_hash in self.list_PK[self.pk_name]):
+            i_registro = self.list_PK[self.pk_name].index(pk_hash)
+            return self.read_record(i_registro)
+        else:
+            return "Llave primaria no encontrada"
 
 #---- class end ----
 
 
 #=====================================
 
-#crear tabla
+
+#Crear tabla
 # diccionario = {"usr_columns": [
 #                    {"tipo": "NUM", "label": "UNO", "size": 10},
-#                    {"tipo": "NUM", "label": "DOS", "size": 10},
+#                    {"tipo": "TEXT", "label": "DOS", "size": 12},
 #                    {"tipo": "NUM", "label": "TRES", "size": 10}],
-#                 "PK_Column": "UNO" , 
-#                 "FK_Columns": ["DOS","TRES"]               
+#                    "PK_Column": "UNO" , 
+#                    "FK_Columns": ["DOS","TRES"]
 #               }
-# newTsv = Table("tablepk.txt", diccionario)
+# newTsv = Table("Tablepk1.txt", diccionario)
 
-#Insertar registro
-# tsv = Table("tablepk.txt")
-# bla = (4, 5, 6)
+# Insertar registro
+# tsv = Table("Tablepk1.txt")
+# bla = (4, '5', 6)
 # tsv.insert_record(bla)
 
-#Leer registro
-# tsv = Table("tablepk.txt")
-# print(tsv.read_record(1))
+# Leer registro
+# tsv = Table("Tablepk1.txt")
+# print(tsv.read_record(0))
+
+
+#Buscar registro por pk
+# tsv = Table("Tablepk1.txt")
+# print(tsv.read_pk(0))
