@@ -1,11 +1,3 @@
-#=============================================
-# (C) 2023 Universidad de Guadalajara. Cutonala.
-#Equipo 2. Llaves primarias y foraneas.
-# Villalpando Rivera Ismael.
-# Anguiano Serrano Marco Antonio.
-# Ramírez Pichardo Oscar Daniel.
-# Jaramillo López Juan Luis.
-#=============================================
 
 from TSFile import TSFile
 import nacl.encoding
